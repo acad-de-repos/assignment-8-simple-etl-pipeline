@@ -21,13 +21,29 @@ class TestETLPipeline(unittest.TestCase):
 
     def tearDown(self):
         """Clean up created files after each test"""
-        if os.path.exists(self.csv_file):
-            os.remove(self.csv_file)
-        if os.path.exists(self.db_file):
-            os.remove(self.db_file)
-        # Dispose of the engine created in setUp if it exists
+        # Dispose of any engine connections first
         if hasattr(self, 'engine'):
             self.engine.dispose()
+        
+        # Clean up CSV file
+        if os.path.exists(self.csv_file):
+            try:
+                os.remove(self.csv_file)
+            except PermissionError:
+                pass  # Ignore permission errors on Windows
+        
+        # Clean up database file with retry logic
+        if os.path.exists(self.db_file):
+            try:
+                os.remove(self.db_file)
+            except PermissionError:
+                # On Windows, sometimes need to wait a bit for file handles to close
+                import time
+                time.sleep(0.1)
+                try:
+                    os.remove(self.db_file)
+                except PermissionError:
+                    pass  # Ignore if still can't delete
 
     def test_extract(self):
         """Test the extract function"""
@@ -44,20 +60,20 @@ class TestETLPipeline(unittest.TestCase):
 
     def test_load(self):
         """Test the load function"""
-        engine = create_engine(f'sqlite:///{self.db_file}')
-        with engine.connect() as connection:
+        self.engine = create_engine(f'sqlite:///{self.db_file}')
+        with self.engine.connect() as connection:
             df = extract(self.csv_file)
             transformed_df = transform(df)
             load(transformed_df, connection, self.table_name)
 
-            inspector = inspect(engine)
+            inspector = inspect(self.engine)
             self.assertTrue(inspector.has_table(self.table_name))
 
     def test_run_etl(self):
         """Test the end-to-end ETL pipeline"""
         run_etl(self.csv_file, self.db_file, self.table_name)
-        engine = create_engine(f'sqlite:///{self.db_file}')
-        with engine.connect() as connection:
+        self.engine = create_engine(f'sqlite:///{self.db_file}')
+        with self.engine.connect() as connection:
             df = pd.read_sql_table(self.table_name, connection)
             self.assertEqual(df.shape[0], 3)
             self.assertIn('full_name', df.columns)
